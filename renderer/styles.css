@@ -18,6 +18,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* hidden 属性必须真正隐藏（否则会被 display:flex 等样式覆盖） */
+[hidden] { display: none !important; }
+
 body {
   font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
   background: var(--bg);
