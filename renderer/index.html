@@ -35,7 +35,7 @@
 
       <div class="section-header">
         <span>分类文件夹</span>
-        <button id="btnAddFolder" class="icon-btn" title="新建文件夹">＋</button>
+        <button id="btnAddFolder" class="icon-btn" title="新建分类">＋</button>
       </div>
       <nav class="nav-section folders" id="folderList"></nav>
 
@@ -53,6 +53,7 @@
     <main class="main-area">
       <header class="toolbar">
         <div class="search-box">
+          <span class="search-icon">🔍</span>
           <input type="text" id="searchInput" placeholder="搜索卡片标题、内容、作者、模型、标签...">
         </div>
         <div class="toolbar-actions">
@@ -61,13 +62,32 @@
             <option value="createdAt">最近创建</option>
             <option value="title">标题 A-Z</option>
           </select>
-          <button id="btnViewToggle" class="tool-btn" title="切换视图">▤ 列表</button>
+          <button id="btnViewToggle" class="tool-btn" title="切换视图">▤</button>
+          <button id="btnBatch" class="tool-btn" title="批量管理">☑ 批量</button>
           <button id="btnExport" class="tool-btn">导出</button>
           <button id="btnImport" class="tool-btn">导入</button>
           <button id="btnNewCard" class="primary-btn">＋ 新建卡片</button>
           <input type="file" id="importFileInput" accept=".json" hidden>
         </div>
       </header>
+
+      <!-- 统计面板 -->
+      <div class="stats-row" id="statsRow">
+        <div class="stat-card"><div class="stat-num" id="statCards">0</div><div class="stat-label">卡片</div></div>
+        <div class="stat-card"><div class="stat-num" id="statFolders">0</div><div class="stat-label">分类</div></div>
+        <div class="stat-card"><div class="stat-num" id="statTags">0</div><div class="stat-label">标签</div></div>
+        <div class="stat-card"><div class="stat-num" id="statWeek">0</div><div class="stat-label">本周新增</div></div>
+      </div>
+
+      <!-- 批量操作条 -->
+      <div class="batch-bar" id="batchBar" hidden>
+        <span>已选 <b id="batchCount">0</b> 张</span>
+        <select id="batchMoveSelect"></select>
+        <button class="tool-btn" id="btnBatchMove">移动</button>
+        <button class="tool-btn" id="btnBatchExport">导出JSON</button>
+        <button class="danger-btn" id="btnBatchDelete">删除</button>
+        <button class="ghost-btn" id="btnBatchExit">退出批量</button>
+      </div>
 
       <div class="content-header">
         <h2 id="currentViewTitle">全部卡片</h2>
@@ -151,9 +171,11 @@
       </div>
       <div class="modal-body" id="detailBody"></div>
       <div class="modal-footer">
+        <button class="ghost-btn" id="btnShareImage">生成分享图</button>
+        <button class="ghost-btn" id="btnCloneCard">克隆</button>
         <button class="ghost-btn" id="btnHideToggle"></button>
         <button class="ghost-btn" id="btnEditFromDetail">编辑</button>
-        <button class="danger-btn" id="btnDeleteCard">删除卡片</button>
+        <button class="danger-btn" id="btnDeleteCard">删除</button>
         <button class="primary-btn" id="btnCopyPrompt">复制提示词</button>
       </div>
     </div>
@@ -187,6 +209,20 @@
       <div class="modal-footer">
         <button class="ghost-btn" data-close="exportModal">取消</button>
         <button class="primary-btn" id="btnDoExport">导出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用输入对话框（替代 window.prompt，Electron 兼容） -->
+  <div class="modal" id="inputModal" hidden>
+    <div class="modal-panel small">
+      <div class="modal-header"><h3 id="inputModalTitle">输入</h3></div>
+      <div class="modal-body">
+        <input type="text" id="inputModalField">
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close="inputModal">取消</button>
+        <button class="primary-btn" id="btnInputOk">确定</button>
       </div>
     </div>
   </div>

@@ -1,8 +1,13 @@
 // PromptCard Open - Electron 主进程
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
 const path = require('path');
 
 let mainWindow = null;
+
+// 外部链接用系统浏览器打开
+ipcMain.handle('open-external', (event, url) => {
+  if (/^https?:\/\//.test(url)) shell.openExternal(url);
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -13,7 +18,8 @@ function createWindow() {
     title: 'PromptCard Open',
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
 

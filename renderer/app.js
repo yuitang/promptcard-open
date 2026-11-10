@@ -1,4 +1,4 @@
-// PromptCard Open - 渲染层逻辑（原创实现）
+// PromptCard Open - 渲染层逻辑（原创实现 v2）
 // 数据全部保存在 localStorage，可随时通过 JSON 导入/导出迁移。
 'use strict';
 
@@ -7,18 +7,20 @@ const PAGE_SIZE = 12;
 
 // ---------- 状态 ----------
 const state = {
-  data: null,          // { version, folders, cards, settings }
+  data: null,
   filter: { type: 'all', folderId: null, tag: null },
   search: '',
   view: 'grid',
   sort: 'updatedAt',
   page: 1,
-  editingCardId: null, // null = 新建
+  editingCardId: null,
   editorModels: [],
   editorTags: [],
-  editorImages: [],    // dataURL 列表
+  editorImages: [],
   editorLinks: [],
-  currentDetailCardId: null
+  currentDetailCardId: null,
+  batchMode: false,
+  selected: new Set()
 };
 
 // ---------- 工具 ----------
@@ -52,7 +54,89 @@ function toast(msg) {
   toast._timer = setTimeout(() => { t.hidden = true; }, 2200);
 }
 
+// Electron 兼容：window.prompt 不可用，用自定义对话框替代
+function askInput(title, defaultValue) {
+  return new Promise(resolve => {
+    $('#inputModalTitle').textContent = title;
+    const field = $('#inputModalField');
+    field.value = defaultValue || '';
+    $('#inputModal').hidden = false;
+    setTimeout(() => { field.focus(); field.select(); }, 50);
+
+    const okBtn = $('#btnInputOk');
+    const cleanup = value => {
+      okBtn.removeEventListener('click', onOk);
+      field.removeEventListener('keydown', onEnter);
+      $('#inputModal').hidden = true;
+      resolve(value);
+    };
+    const onOk = () => cleanup(field.value.trim());
+    const onEnter = e => { if (e.key === 'Enter') { e.preventDefault(); onOk(); } };
+    okBtn.removeEventListener('click', askInput._prevOk || (() => {}));
+    field.removeEventListener('keydown', askInput._prevEnter || (() => {}));
+    askInput._prevOk = onOk;
+    askInput._prevEnter = onEnter;
+    okBtn.addEventListener('click', onOk);
+    field.addEventListener('keydown', onEnter);
+  });
+}
+
+// 外部链接：Electron 用系统浏览器，浏览器环境用 window.open
+function openExternal(url) {
+  if (window.promptCardAPI && window.promptCardAPI.openExternal) {
+    window.promptCardAPI.openExternal(url);
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
 // ---------- 数据层 ----------
+function sampleCards() {
+  const now = nowISO();
+  return [
+    {
+      title: '电影感人像 · 黄昏逆光', category: 'f_ai_image',
+      prompt: '电影感半身人像，年轻女性站在黄昏的天台，夕阳逆光勾出发丝轮廓，浅景深，85mm镜头，胶片颗粒质感，暖橙色调，轻微镜头光晕',
+      description: '暖调人像万能公式，换主体可复用', author: '',
+      models: ['Midjourney', 'SDXL'], tags: ['人像', '电影感'],
+      images: [], links: [{ name: '', url: '' }],
+      favorite: true, hidden: false, pinned: true, createdAt: now, updatedAt: now
+    },
+    {
+      title: '产品静物 · 极简白底', category: 'f_ai_image',
+      prompt: '极简产品摄影，白色陶瓷马克杯置于纯白背景，柔和顶光加反光板补光，轻微投影，商业级质感，8k细节',
+      description: '电商主图风格', author: '',
+      models: ['Midjourney'], tags: ['产品图', '电商'],
+      images: [], links: [], favorite: false, hidden: false, pinned: false,
+      createdAt: now, updatedAt: now
+    },
+    {
+      title: '代码审查助手', category: 'f_ai_chat',
+      prompt: '你是一名资深代码审查专家。请审查我提供的代码，按【正确性、可读性、性能、安全性】四个维度输出意见，每个维度给出具体修改建议和示例代码，最后给出总体评分（1-10）。',
+      description: '日常代码 Review 模板', author: '',
+      models: ['GPT-4o', 'Claude'], tags: ['编程', '效率'],
+      images: [], links: [], favorite: false, hidden: false, pinned: false,
+      createdAt: now, updatedAt: now
+    },
+    {
+      title: '周报生成器', category: 'f_ai_chat',
+      prompt: '根据我列出的本周工作事项，生成一份结构化周报：本周完成 / 进行中 / 下周计划 / 风险与需要的支持。语气专业简洁，每条不超过 30 字。',
+      description: '贴上事项就能出周报', author: '',
+      models: ['GPT-4o'], tags: ['职场'],
+      images: [], links: [], favorite: false, hidden: false, pinned: false,
+      createdAt: now, updatedAt: now
+    },
+    {
+      title: '插画 · 吉卜力风格风景', category: 'f_ai_image',
+      prompt: '吉卜力风格手绘插画，夏日乡村稻田小路，蓝天白云，远处风车，饱满绿色层次，水彩质感，柔和光线，宫崎骏氛围',
+      description: '治愈系风景', author: '',
+      models: ['Midjourney', 'NovelAI'], tags: ['插画', '风景'],
+      images: [], links: [], favorite: false, hidden: false, pinned: false,
+      createdAt: now, updatedAt: now
+    }
+  ];
+}
+
 function defaultData() {
   return {
     version: 1,
@@ -60,8 +144,9 @@ function defaultData() {
       { id: 'f_ai_chat', name: 'AI 对话' },
       { id: 'f_ai_image', name: 'AI 绘图' }
     ],
-    cards: [],
-    settings: { view: 'grid', sort: 'updatedAt' }
+    cards: sampleCards(),
+    settings: { view: 'grid', sort: 'updatedAt' },
+    seeded: true
   };
 }
 
@@ -70,7 +155,6 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       state.data = JSON.parse(raw);
-      // 兼容缺字段
       if (!state.data.folders) state.data.folders = [];
       if (!state.data.cards) state.data.cards = [];
       if (!state.data.settings) state.data.settings = {};
@@ -89,7 +173,11 @@ function loadData() {
 function saveData() {
   state.data.settings.view = state.view;
   state.data.settings.sort = state.sort;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+  } catch (e) {
+    toast('保存失败：本地存储空间不足，请删除部分大图或导出备份');
+  }
 }
 
 function getFolder(id) {
@@ -155,12 +243,15 @@ function visibleCards() {
     });
   }
 
-  const sorters = {
-    updatedAt: (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''),
-    createdAt: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
-    title: (a, b) => (a.title || '').localeCompare(b.title || '', 'zh')
-  };
-  cards.sort(sorters[state.sort] || sorters.updatedAt);
+  cards.sort((a, b) => {
+    if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1;
+    const sorters = {
+      updatedAt: (x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || ''),
+      createdAt: (x, y) => (y.createdAt || '').localeCompare(x.createdAt || ''),
+      title: (x, y) => (x.title || '').localeCompare(y.title || '', 'zh')
+    };
+    return (sorters[state.sort] || sorters.updatedAt)(a, b);
+  });
   return cards;
 }
 
@@ -168,6 +259,7 @@ function visibleCards() {
 function render() {
   renderSidebar();
   renderCards();
+  renderStats();
   updateStorageStats();
 }
 
@@ -177,7 +269,6 @@ function renderSidebar() {
   $('#countFavorites').textContent = cards.filter(c => c.favorite && !c.hidden).length;
   $('#countHidden').textContent = cards.filter(c => c.hidden).length;
 
-  // 文件夹列表
   const folderList = $('#folderList');
   folderList.innerHTML = '';
   state.data.folders.forEach(folder => {
@@ -196,7 +287,6 @@ function renderSidebar() {
     folderList.appendChild(row);
   });
 
-  // 标签云
   const tagCount = {};
   state.data.cards.forEach(c => (c.tags || []).forEach(t => { tagCount[t] = (tagCount[t] || 0) + 1; }));
   const cloud = $('#tagCloud');
@@ -217,40 +307,62 @@ function renderSidebar() {
     cloud.appendChild(pill);
   });
 
-  // 当前视图标题
   let title = '全部卡片';
   if (state.filter.type === 'favorites') title = '收藏';
   else if (state.filter.type === 'hidden') title = '隐藏的卡片';
   else if (state.filter.type === 'folder') title = getFolder(state.filter.folderId)?.name || '分类';
   if (state.filter.tag) title += ` · #${state.filter.tag}`;
   $('#currentViewTitle').textContent = title;
+}
 
-  // 导航高亮
-  $$('.nav-section > .nav-item').forEach(el => {
-    el.classList.toggle('active',
-      el.dataset.filter === state.filter.type && !state.filter.folderId);
-  });
+function renderStats() {
+  const cards = state.data.cards;
+  const tags = new Set();
+  cards.forEach(c => (c.tags || []).forEach(t => tags.add(t)));
+  const weekAgo = Date.now() - 7 * 86400000;
+  const weekNew = cards.filter(c => new Date(c.createdAt).getTime() > weekAgo).length;
+  $('#statCards').textContent = cards.length;
+  $('#statFolders').textContent = state.data.folders.length;
+  $('#statTags').textContent = tags.size;
+  $('#statWeek').textContent = weekNew;
 }
 
 function cardHTML(c) {
   const folder = getFolder(c.category);
   const imgs = (c.images || []);
-  const thumb = imgs.length ? `<img class="card-thumb" src="${imgs[0]}" alt="">` : '';
+  const thumb = imgs.length
+    ? `<img class="card-thumb" src="${imgs[0]}" alt="">`
+    : `<div class="card-thumb-placeholder">◈</div>`;
   const modelChips = (c.models || []).map(m => `<span class="chip">${esc(m)}</span>`).join('');
   const tagChips = (c.tags || []).map(t => `<span class="chip tag">#${esc(t)}</span>`).join('');
   const catChip = folder ? `<span class="chip cat">${esc(folder.name)}</span>` : '';
   return `
-    ${thumb}
+    <div class="card-check">✓</div>
+    <div class="card-thumb-wrap">
+      ${thumb}
+      ${folder ? `<span class="card-cover-badge">${esc(folder.name)}</span>` : ''}
+      <div class="card-flag">
+        ${c.pinned ? '<span title="已置顶">📌</span>' : ''}
+        ${c.hidden ? '<span title="已隐藏">🙈</span>' : ''}
+      </div>
+    </div>
     <div class="card-body">
       <div class="card-title">
         <span class="fav ${c.favorite ? 'on' : ''}" data-fav="${c.id}" title="收藏">${c.favorite ? '★' : '☆'}</span>
-        ${esc(c.title || '未命名卡片')}
-        ${c.hidden ? '<span class="chip">🙈已隐藏</span>' : ''}
+        <span>${esc(c.title || '未命名卡片')}</span>
       </div>
       ${c.description ? `<div class="card-desc">${esc(c.description)}</div>` : ''}
       <div class="card-prompt">${esc(c.prompt || '')}</div>
       <div class="chips">${catChip}${modelChips}${tagChips}</div>
-      <div class="card-meta">更新于 ${fmtDate(c.updatedAt)}${c.author ? ' · 作者 ' + esc(c.author) : ''}</div>
+      <div class="card-footer">
+        <span class="card-meta">更新于 ${fmtDate(c.updatedAt)}${c.author ? ' · ' + esc(c.author) : ''}</span>
+        <div class="card-actions">
+          <button class="icon-btn" data-pin="${c.id}" title="${c.pinned ? '取消置顶' : '置顶'}">📌</button>
+          <button class="icon-btn" data-clone="${c.id}" title="克隆">⧉</button>
+          <button class="icon-btn" data-edit="${c.id}" title="编辑">✎</button>
+          <button class="icon-btn" data-del="${c.id}" title="删除">🗑</button>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -259,9 +371,10 @@ function renderCards() {
   const container = $('#cardContainer');
   container.classList.toggle('grid', state.view === 'grid');
   container.classList.toggle('list', state.view === 'list');
+  container.classList.toggle('batch-mode', state.batchMode);
 
   $('#resultCount').textContent = `共 ${cards.length} 张卡片`;
-  $('#btnViewToggle').textContent = state.view === 'grid' ? '▤ 列表' : '▦ 网格';
+  $('#btnViewToggle').textContent = state.view === 'grid' ? '▤' : '▦';
 
   const totalPages = Math.max(1, Math.ceil(cards.length / PAGE_SIZE));
   if (state.page > totalPages) state.page = totalPages;
@@ -272,14 +385,14 @@ function renderCards() {
       <div class="empty-state">
         <div class="big">🗂️</div>
         <div>这里还没有卡片</div>
-        <div style="margin-top:8px"><button class="primary-btn" onclick="document.getElementById('btnNewCard').click()">＋ 新建第一张卡片</button></div>
+        <div style="margin-top:10px"><button class="primary-btn" onclick="document.getElementById('btnNewCard').click()">＋ 新建第一张卡片</button></div>
       </div>`;
     renderPagination(totalPages);
     return;
   }
 
   container.innerHTML = pageCards.map(c =>
-    `<div class="card ${state.view === 'list' ? 'list-view' : ''} ${c.hidden ? 'hidden-card' : ''}" data-card="${c.id}">
+    `<div class="card ${state.view === 'list' ? 'list-view' : ''} ${c.hidden ? 'hidden-card' : ''} ${state.selected.has(c.id) ? 'selected' : ''}" data-card="${c.id}">
       ${cardHTML(c)}
     </div>`).join('');
   renderPagination(totalPages);
@@ -315,7 +428,6 @@ function openEditor(cardId) {
   $('#cardDescription').value = c?.description || '';
   $('#cardAuthor').value = c?.author || '';
 
-  // 分类下拉
   const sel = $('#cardCategory');
   sel.innerHTML = state.data.folders.map(f =>
     `<option value="${f.id}">${esc(f.name)}</option>`).join('');
@@ -428,7 +540,7 @@ function saveCardFromForm() {
     prompt,
     description: $('#cardDescription').value.trim(),
     author: $('#cardAuthor').value.trim(),
-    category: $('#cardCategory').value,
+    category: $('#cardCategory').value || null,
     models: state.editorModels.slice(),
     tags: state.editorTags.slice(),
     images: state.editorImages.slice(),
@@ -443,7 +555,7 @@ function saveCardFromForm() {
   } else {
     state.data.cards.push({
       id: uid(), ...payload,
-      favorite: false, hidden: false,
+      favorite: false, hidden: false, pinned: false,
       createdAt: nowISO(), updatedAt: nowISO()
     });
     toast('卡片已创建');
@@ -476,10 +588,153 @@ function openDetail(cardId) {
       ${linkHtml}<br>
       <b>创建：</b>${fmtDate(c.createdAt)}　<b>更新：</b>${fmtDate(c.updatedAt)}
     </div>
-    ${(c.images || []).length ? `<div class="detail-images">${c.images.map(s => `<img src="${s}" data-img="${s}">`).join('')}</div>` : ''}`;
+    ${(c.images || []).length ? `<div class="detail-images">${c.images.map(s => `<img src="${s}" alt="">`).join('')}</div>` : ''}`;
 
-  $('#btnHideToggle').textContent = c.hidden ? '取消隐藏' : '隐藏卡片';
+  $('#btnHideToggle').textContent = c.hidden ? '取消隐藏' : '隐藏';
   $('#detailModal').hidden = false;
+}
+
+// ---------- 分享图（canvas 绘制卡片图） ----------
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const ch of para) {
+      if (ctx.measureText(line + ch).width > maxWidth) { lines.push(line); line = ch; }
+      else line += ch;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+function generateShareImage(card) {
+  const W = 900, PAD = 56;
+  const dpr = 2;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // 先测量内容高度
+  ctx.font = '26px "Microsoft YaHei", sans-serif';
+  const title = card.title || '未命名卡片';
+  ctx.font = '15px Consolas, monospace';
+  const promptLines = wrapText(ctx, card.prompt || '', W - PAD * 2);
+  const metaParts = [];
+  if ((card.models || []).length) metaParts.push('模型：' + card.models.join('、'));
+  if ((card.tags || []).length) metaParts.push('标签：' + card.tags.map(t => '#' + t).join(' '));
+  const metaLines = metaParts.length ? wrapText(ctx, metaParts.join('　'), W - PAD * 2) : [];
+
+  const hasImg = (card.images || []).length > 0;
+  const IMG_H = hasImg ? 320 : 0;
+  const H = PAD + 44 + 20 + promptLines.length * 26 + 24 + metaLines.length * 24 + 40 + IMG_H + 30;
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+
+  // 背景
+  const grad = ctx.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, '#eef1fd');
+  grad.addColorStop(1, '#f7f0fd');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // 卡片主体
+  const cardY = 24, cardH = H - 48, cardX = 24, cardW = W - 48;
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#e4e8ef';
+  roundRect(ctx, cardX, cardY, cardW, cardH, 18);
+  ctx.fill();
+  ctx.stroke();
+
+  // 顶部色条
+  const barGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0);
+  barGrad.addColorStop(0, '#4f6bed');
+  barGrad.addColorStop(1, '#7c5cf0');
+  ctx.fillStyle = barGrad;
+  roundRectTop(ctx, cardX, cardY, cardW, 8, 18);
+  ctx.fill();
+
+  let y = cardY + 46;
+  // 标题
+  ctx.fillStyle = '#1f2329';
+  ctx.font = 'bold 26px "Microsoft YaHei", sans-serif';
+  const titleLines = wrapText(ctx, title, cardW - PAD * 1.6);
+  titleLines.forEach(tl => { ctx.fillText(tl, cardX + PAD, y); y += 36; });
+  y += 8;
+
+  // 配图
+  if (hasImg) {
+    const img = new Image();
+    img.onload = () => drawRest();
+    img.onerror = () => drawRest();
+    img.src = card.images[0];
+    function drawRest() {
+      const iw = cardW - PAD * 1.6;
+      const ih = IMG_H;
+      ctx.save();
+      roundRect(ctx, cardX + PAD, y, iw, ih, 12);
+      ctx.clip();
+      ctx.drawImage(img, cardX + PAD, y, iw, ih);
+      ctx.restore();
+      y += ih + 24;
+      finish();
+    }
+  } else {
+    finish();
+  }
+
+  function finish() {
+    // 提示词
+    ctx.font = '15px Consolas, monospace';
+    ctx.fillStyle = '#3d4450';
+    promptLines.forEach(tl => { ctx.fillText(tl, cardX + PAD, y); y += 26; });
+    y += 16;
+
+    // 元信息
+    if (metaLines.length) {
+      ctx.font = '14px "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#6b7280';
+      metaLines.forEach(ml => { ctx.fillText(ml, cardX + PAD, y); y += 24; });
+    }
+
+    // 底部署名
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#9aa2b1';
+    ctx.fillText('PromptCard Open · ' + fmtDate(card.updatedAt), cardX + PAD, cardY + cardH - 26);
+
+    const out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    out.getContext('2d').drawImage(canvas, 0, 0);
+    const a = document.createElement('a');
+    a.href = out.toDataURL('image/png');
+    a.download = `${(card.title || '卡片').slice(0, 20)}-分享图.png`;
+    a.click();
+    toast('分享图已生成并下载');
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function roundRectTop(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.lineTo(x + w, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
 
 // ---------- 导出 ----------
@@ -539,7 +794,6 @@ function doExport(format, scope) {
     return;
   }
 
-  // 按分类分组
   const groups = {};
   cards.forEach(c => {
     const name = getFolder(c.category)?.name || '未分类';
@@ -596,7 +850,7 @@ function doImport(file) {
             category: getFolder(c.category) ? c.category : (state.data.folders[0]?.id || null),
             models: c.models || [], tags: c.tags || [],
             images: c.images || [], links: c.links || [],
-            favorite: !!c.favorite, hidden: !!c.hidden,
+            favorite: !!c.favorite, hidden: !!c.hidden, pinned: !!c.pinned,
             createdAt: c.createdAt || nowISO(), updatedAt: c.updatedAt || nowISO()
           });
           addedCards++;
@@ -623,14 +877,30 @@ function confirmAction(title, text, fn) {
     $('#confirmModal').hidden = true;
     fn();
   };
-  ok.removeEventListener('click', ok._handler || (() => {}));
-  ok._handler = handler;
+  ok.removeEventListener('click', confirmAction._prev || (() => {}));
+  confirmAction._prev = handler;
   ok.addEventListener('click', handler);
+}
+
+// ---------- 批量模式 ----------
+function toggleBatchMode() {
+  state.batchMode = !state.batchMode;
+  state.selected.clear();
+  $('#batchBar').hidden = !state.batchMode;
+  if (state.batchMode) {
+    const sel = $('#batchMoveSelect');
+    sel.innerHTML = state.data.folders.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+  }
+  $('#btnBatch').classList.toggle('active-btn', state.batchMode);
+  renderCards();
+}
+
+function updateBatchCount() {
+  $('#batchCount').textContent = state.selected.size;
 }
 
 // ---------- 事件绑定 ----------
 function bindEvents() {
-  // 侧边栏导航
   $$('.nav-section > .nav-item').forEach(el => {
     el.addEventListener('click', () => {
       state.filter = { type: el.dataset.filter, folderId: null, tag: null };
@@ -639,7 +909,7 @@ function bindEvents() {
     });
   });
 
-  $('#folderList').addEventListener('click', e => {
+  $('#folderList').addEventListener('click', async e => {
     const nav = e.target.closest('[data-folder]');
     if (nav) {
       state.filter = { type: 'folder', folderId: nav.dataset.folder, tag: null };
@@ -650,9 +920,9 @@ function bindEvents() {
     const ren = e.target.closest('[data-rename-folder]');
     if (ren) {
       const folder = getFolder(ren.dataset.renameFolder);
-      const name = prompt('重命名分类：', folder.name);
-      if (name && name.trim()) {
-        folder.name = name.trim();
+      const name = await askInput('重命名分类', folder.name);
+      if (name) {
+        folder.name = name;
         saveData(); render();
       }
       return;
@@ -671,15 +941,14 @@ function bindEvents() {
     }
   });
 
-  $('#btnAddFolder').addEventListener('click', () => {
-    const name = prompt('新分类名称：');
-    if (name && name.trim()) {
-      state.data.folders.push({ id: uid(), name: name.trim() });
+  $('#btnAddFolder').addEventListener('click', async () => {
+    const name = await askInput('新分类名称', '');
+    if (name) {
+      state.data.folders.push({ id: uid(), name });
       saveData(); render();
     }
   });
 
-  // 搜索 / 排序 / 视图
   $('#searchInput').addEventListener('input', e => {
     state.search = e.target.value;
     state.page = 1;
@@ -693,9 +962,20 @@ function bindEvents() {
     state.view = state.view === 'grid' ? 'list' : 'grid';
     saveData(); renderCards();
   });
+  $('#btnBatch').addEventListener('click', toggleBatchMode);
 
-  // 卡片点击
   $('#cardContainer').addEventListener('click', e => {
+    if (state.batchMode) {
+      const card = e.target.closest('[data-card]');
+      if (card) {
+        const id = card.dataset.card;
+        if (state.selected.has(id)) state.selected.delete(id);
+        else state.selected.add(id);
+        updateBatchCount();
+        renderCards();
+      }
+      return;
+    }
     const fav = e.target.closest('[data-fav]');
     if (fav) {
       e.stopPropagation();
@@ -703,15 +983,100 @@ function bindEvents() {
       if (c) { c.favorite = !c.favorite; saveData(); render(); }
       return;
     }
+    const pin = e.target.closest('[data-pin]');
+    if (pin) {
+      e.stopPropagation();
+      const c = state.data.cards.find(x => x.id === pin.dataset.pin);
+      if (c) { c.pinned = !c.pinned; saveData(); render(); toast(c.pinned ? '已置顶' : '已取消置顶'); }
+      return;
+    }
+    const clone = e.target.closest('[data-clone]');
+    if (clone) {
+      e.stopPropagation();
+      const c = state.data.cards.find(x => x.id === clone.dataset.clone);
+      if (c) {
+        state.data.cards.push({
+          ...JSON.parse(JSON.stringify(c)),
+          id: uid(), title: (c.title || '卡片') + ' 副本',
+          createdAt: nowISO(), updatedAt: nowISO()
+        });
+        saveData(); render(); toast('已克隆卡片');
+      }
+      return;
+    }
+    const edit = e.target.closest('[data-edit]');
+    if (edit) {
+      e.stopPropagation();
+      openDetail(edit.dataset.edit);
+      $('#detailModal').hidden = true;
+      openEditor(edit.dataset.edit);
+      return;
+    }
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      e.stopPropagation();
+      confirmAction('删除卡片', '确定删除这张卡片吗？此操作不可撤销（建议先导出 JSON 备份）。', () => {
+        state.data.cards = state.data.cards.filter(x => x.id !== del.dataset.del);
+        saveData(); render(); toast('卡片已删除');
+      });
+      return;
+    }
     const card = e.target.closest('[data-card]');
     if (card) openDetail(card.dataset.card);
   });
+
+  // 批量操作
+  $('#btnBatchMove').addEventListener('click', () => {
+    if (!state.selected.size) { toast('请先选择卡片'); return; }
+    const target = $('#batchMoveSelect').value;
+    state.data.cards.forEach(c => { if (state.selected.has(c.id)) c.category = target; });
+    saveData(); render();
+    toast(`已移动 ${state.selected.size} 张卡片`);
+    toggleBatchMode();
+  });
+  $('#btnBatchExport').addEventListener('click', () => {
+    if (!state.selected.size) { toast('请先选择卡片'); return; }
+    const cards = state.data.cards.filter(c => state.selected.has(c.id));
+    const payload = {
+      exportedFrom: 'PromptCard Open', version: 1, exportedAt: nowISO(),
+      folders: state.data.folders, cards
+    };
+    downloadFile(`promptcard-open-selected-${Date.now()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    toast(`已导出 ${cards.length} 张卡片`);
+  });
+  $('#btnBatchDelete').addEventListener('click', () => {
+    if (!state.selected.size) { toast('请先选择卡片'); return; }
+    const n = state.selected.size;
+    confirmAction('批量删除', `确定删除选中的 ${n} 张卡片吗？此操作不可撤销。`, () => {
+      state.data.cards = state.data.cards.filter(c => !state.selected.has(c.id));
+      saveData(); toggleBatchMode(); render();
+      toast(`已删除 ${n} 张卡片`);
+    });
+  });
+  $('#btnBatchExit').addEventListener('click', toggleBatchMode);
 
   // 详情操作
   $('#btnCopyPrompt').addEventListener('click', () => {
     const c = state.data.cards.find(x => x.id === state.currentDetailCardId);
     if (c) {
       navigator.clipboard.writeText(c.prompt || '').then(() => toast('提示词已复制'));
+    }
+  });
+  $('#btnShareImage').addEventListener('click', () => {
+    const c = state.data.cards.find(x => x.id === state.currentDetailCardId);
+    if (c) { $('#detailModal').hidden = true; generateShareImage(c); }
+  });
+  $('#btnCloneCard').addEventListener('click', () => {
+    const c = state.data.cards.find(x => x.id === state.currentDetailCardId);
+    if (c) {
+      state.data.cards.push({
+        ...JSON.parse(JSON.stringify(c)),
+        id: uid(), title: (c.title || '卡片') + ' 副本',
+        createdAt: nowISO(), updatedAt: nowISO()
+      });
+      saveData();
+      $('#detailModal').hidden = true;
+      render(); toast('已克隆卡片');
     }
   });
   $('#btnEditFromDetail').addEventListener('click', () => {
@@ -732,7 +1097,7 @@ function bindEvents() {
     if (c) {
       c.hidden = !c.hidden;
       saveData();
-      $('#btnHideToggle').textContent = c.hidden ? '取消隐藏' : '隐藏卡片';
+      $('#btnHideToggle').textContent = c.hidden ? '取消隐藏' : '隐藏';
       render();
     }
   });
@@ -740,7 +1105,7 @@ function bindEvents() {
     const a = e.target.closest('a[data-url]');
     if (a) {
       e.preventDefault();
-      window.open(a.dataset.url, '_blank');
+      openExternal(a.dataset.url);
     }
   });
 
@@ -790,12 +1155,12 @@ function bindEvents() {
   });
   $$('.modal').forEach(m => {
     m.addEventListener('mousedown', e => {
-      if (e.target === m && m.id !== 'confirmModal') m.hidden = true;
+      if (e.target === m && m.id !== 'confirmModal' && m.id !== 'inputModal') m.hidden = true;
     });
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      const open = $$('.modal').find(m => !m.hidden && m.id !== 'confirmModal');
+      const open = $$('.modal').find(m => !m.hidden && m.id !== 'confirmModal' && m.id !== 'inputModal');
       if (open) open.hidden = true;
     }
   });
@@ -803,5 +1168,6 @@ function bindEvents() {
 
 // ---------- 启动 ----------
 loadData();
+$('#sortSelect').value = state.sort;
 bindEvents();
 render();
