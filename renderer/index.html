@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PromptCard Open - AI 提示词卡片管理器</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">◈</div>
+        <div class="brand-text">
+          <h1>PromptCard Open</h1>
+          <span>开源提示词卡片库</span>
+        </div>
+      </div>
+
+      <nav class="nav-section">
+        <div class="nav-item active" data-filter="all">
+          <span class="nav-icon">🗂</span><span>全部卡片</span>
+          <span class="nav-count" id="countAll">0</span>
+        </div>
+        <div class="nav-item" data-filter="favorites">
+          <span class="nav-icon">⭐</span><span>收藏</span>
+          <span class="nav-count" id="countFavorites">0</span>
+        </div>
+        <div class="nav-item" data-filter="hidden">
+          <span class="nav-icon">🙈</span><span>隐藏的卡片</span>
+          <span class="nav-count" id="countHidden">0</span>
+        </div>
+      </nav>
+
+      <div class="section-header">
+        <span>分类文件夹</span>
+        <button id="btnAddFolder" class="icon-btn" title="新建文件夹">＋</button>
+      </div>
+      <nav class="nav-section folders" id="folderList"></nav>
+
+      <div class="section-header">
+        <span>标签云</span>
+      </div>
+      <div class="tag-cloud" id="tagCloud"></div>
+
+      <div class="sidebar-footer">
+        <div class="storage-stats" id="storageStats"></div>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main class="main-area">
+      <header class="toolbar">
+        <div class="search-box">
+          <input type="text" id="searchInput" placeholder="搜索卡片标题、内容、作者、模型、标签...">
+        </div>
+        <div class="toolbar-actions">
+          <select id="sortSelect" title="排序方式">
+            <option value="updatedAt">最近更新</option>
+            <option value="createdAt">最近创建</option>
+            <option value="title">标题 A-Z</option>
+          </select>
+          <button id="btnViewToggle" class="tool-btn" title="切换视图">▤ 列表</button>
+          <button id="btnExport" class="tool-btn">导出</button>
+          <button id="btnImport" class="tool-btn">导入</button>
+          <button id="btnNewCard" class="primary-btn">＋ 新建卡片</button>
+          <input type="file" id="importFileInput" accept=".json" hidden>
+        </div>
+      </header>
+
+      <div class="content-header">
+        <h2 id="currentViewTitle">全部卡片</h2>
+        <span id="resultCount" class="result-count"></span>
+      </div>
+
+      <section class="card-container" id="cardContainer"></section>
+
+      <div class="pagination" id="pagination"></div>
+    </main>
+  </div>
+
+  <!-- 卡片编辑模态框 -->
+  <div class="modal" id="editorModal" hidden>
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h3 id="editorTitle">新建卡片</h3>
+        <button class="close-btn" data-close="editorModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>卡片标题 *</label>
+          <input type="text" id="cardTitle" placeholder="例如：人像摄影 · 电影感光影">
+        </div>
+        <div class="form-row">
+          <label>提示词内容 *</label>
+          <textarea id="cardPrompt" rows="6" placeholder="粘贴你的提示词..."></textarea>
+        </div>
+        <div class="form-row">
+          <label>备注描述</label>
+          <input type="text" id="cardDescription" placeholder="简单描述这张卡片的用途或效果">
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>作者</label>
+            <input type="text" id="cardAuthor" placeholder="谁写的这条提示词">
+          </div>
+          <div>
+            <label>所属分类</label>
+            <select id="cardCategory"></select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>模型标签 <small>（回车添加，如 GPT-4o / Midjourney / SDXL）</small></label>
+          <div class="chip-input" id="modelChipInput">
+            <input type="text" id="modelInput" placeholder="输入模型名后回车">
+          </div>
+        </div>
+        <div class="form-row">
+          <label>自定义标签 <small>（回车添加）</small></label>
+          <div class="chip-input" id="tagChipInput">
+            <input type="text" id="tagInput" placeholder="输入标签后回车">
+          </div>
+        </div>
+        <div class="form-row">
+          <label>平台链接</label>
+          <div id="linkRows"></div>
+          <button type="button" class="ghost-btn" id="btnAddLink">＋ 添加链接</button>
+        </div>
+        <div class="form-row">
+          <label>配图 <small>（可选，多张）</small></label>
+          <div class="image-drop" id="imageDrop">拖拽图片到此处，或点击选择文件
+            <input type="file" id="imageInput" accept="image/*" multiple hidden>
+          </div>
+          <div class="image-previews" id="imagePreviews"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close="editorModal">取消</button>
+        <button class="primary-btn" id="btnSaveCard">保存卡片</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 卡片详情模态框 -->
+  <div class="modal" id="detailModal" hidden>
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h3 id="detailTitle"></h3>
+        <button class="close-btn" data-close="detailModal">×</button>
+      </div>
+      <div class="modal-body" id="detailBody"></div>
+      <div class="modal-footer">
+        <button class="ghost-btn" id="btnHideToggle"></button>
+        <button class="ghost-btn" id="btnEditFromDetail">编辑</button>
+        <button class="danger-btn" id="btnDeleteCard">删除卡片</button>
+        <button class="primary-btn" id="btnCopyPrompt">复制提示词</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出模态框 -->
+  <div class="modal" id="exportModal" hidden>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h3>导出数据</h3>
+        <button class="close-btn" data-close="exportModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>导出格式</label>
+          <select id="exportFormat">
+            <option value="json">JSON（完整备份，可再导入）</option>
+            <option value="md">Markdown（.md，按分类结构）</option>
+            <option value="txt">纯文本（.txt，按分类结构）</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>导出范围</label>
+          <select id="exportScope">
+            <option value="all">全部卡片</option>
+            <option value="current">当前浏览的分类</option>
+          </select>
+        </div>
+        <p class="hint">MD/TXT 导出为单个文件，卡片之间用分隔线区分，并按分类标注归属。</p>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close="exportModal">取消</button>
+        <button class="primary-btn" id="btnDoExport">导出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 确认对话框 -->
+  <div class="modal" id="confirmModal" hidden>
+    <div class="modal-panel small">
+      <div class="modal-header"><h3 id="confirmTitle">确认</h3></div>
+      <div class="modal-body"><p id="confirmText"></p></div>
+      <div class="modal-footer">
+        <button class="ghost-btn" data-close="confirmModal">取消</button>
+        <button class="danger-btn" id="btnConfirmOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

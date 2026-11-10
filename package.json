@@ -1,0 +1,14 @@
+{
+  "name": "promptcard-open",
+  "version": "1.0.0",
+  "description": "PromptCard Open - 开源 AI 提示词卡片管理器",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "yuitang",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
